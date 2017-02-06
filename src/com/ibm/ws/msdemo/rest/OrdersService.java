@@ -1,10 +1,15 @@
 package com.ibm.ws.msdemo.rest;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
 import javax.persistence.EntityManager;
+import javax.persistence.EntityManagerFactory;
+import javax.persistence.Persistence;
 import javax.transaction.UserTransaction;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.GET;
@@ -17,6 +22,10 @@ import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.UriInfo;
 
+import com.ibm.nosql.json.api.BasicDBList;
+import com.ibm.nosql.json.api.BasicDBObject;
+import com.ibm.nosql.json.util.JSON;
+
 import com.ibm.ws.msdemo.rest.pojo.Order;
 
 //Mapped to /orders via web.xml
@@ -25,6 +34,7 @@ public class OrdersService {
 	
 	private UserTransaction utx;
 	private EntityManager em;
+	private Map<String, String> props = new HashMap<String, String>();
 	
 	public OrdersService(){
 		utx = getUserTransaction();
@@ -36,8 +46,10 @@ public class OrdersService {
 	@GET
 	@Produces(MediaType.APPLICATION_JSON)
 	public Response get() {
+		System.out.println("Executing get orders");
 			List<Order> list = em.createQuery("SELECT t FROM Order t", Order.class).getResultList();
 			String json = list.toString();
+			System.out.println(json);
 			return Response.ok(json).build();
 	}
 	
@@ -103,14 +115,11 @@ public class OrdersService {
 	// JNDI name used.
 
 	private EntityManager getEm() {
-		InitialContext ic;
-		try {
-			ic = new InitialContext();
-			return (EntityManager) ic.lookup("java:comp/env/openjpa-order/entitymanager");
-		} catch (NamingException e) {
-			e.printStackTrace();
-		}
-		return null;
+			System.out.println("in getEm");
+			getVCAPCredentials();
+			//return (EntityManager) ic.lookup("java:comp/env/openjpa-order/entitymanager");
+			EntityManagerFactory ef = Persistence.createEntityManagerFactory("openjpa-order", props);
+			return ef.createEntityManager();
 	}
 
 	// Method 2: Parsing VCAP_SERVICES environment variable
@@ -126,10 +135,61 @@ public class OrdersService {
 		InitialContext ic;
 		try {
 			ic = new InitialContext();
+			System.out.println("in getUserTransaction");
 			return (UserTransaction) ic.lookup("java:comp/UserTransaction");
 		} catch (NamingException e) {
 			e.printStackTrace();
 		}
 		return null;
+	}
+	
+	
+	private void getVCAPCredentials() {
+		System.out.println("in getVCAPCredentials");
+		
+		String VCAP_SERVICES = System.getenv("VCAP_SERVICES");
+		System.out.println("VCAP_SERVICES content: " + VCAP_SERVICES);
+		
+		if (VCAP_SERVICES != null) {
+			// parse the VCAP JSON structure
+			BasicDBObject obj = (BasicDBObject) JSON.parse(VCAP_SERVICES);
+			String thekey = null;
+			Set<String> keys = obj.keySet();
+			System.out.println("Searching through VCAP keys");
+			// Look for the VCAP key that holds the SQLDB information
+			for (String eachkey : keys) {
+				System.out.println("Key is: " + eachkey);
+				// Just in case the service name gets changed
+				// to lower case in the future, use toUpperCase
+				if (eachkey.toUpperCase().contains("CLEARDB")) {
+					thekey = eachkey;
+				}
+			}
+			if (thekey == null) {
+				System.out.println("Cannot find any CLEARDB service in VCAP; exit");
+				return;
+			}
+			BasicDBList list = (BasicDBList) obj.get(thekey);
+			obj = (BasicDBObject) list.get("0");
+			System.out.println("Service found: " + obj.get("name"));
+			// parse all the credentials from the vcap env variable
+			obj = (BasicDBObject) obj.get("credentials");
+			
+			String uri = (String) obj.get("jdbcUrl");
+			System.out.println("uri = "+uri);
+			String username = (String) obj.get("username");
+			System.out.println("_dbUser = "+username);
+			String password = (String) obj.get("password");
+			System.out.println("_dbPW = "+password);
+			
+			props.put("javax.persistence.jdbc.url", uri);
+			props.put("javax.persistence.jdbc.user", username);
+			props.put("javax.persistence.jdbc.password", password);
+			props.put("javax.persistence.jdbc.driver", "com.mysql.jdbc.Driver");
+		} else {
+			System.out.println("VCAP_SERVICES is null");
+		}
+		
+		System.out.println("Updated props");
 	}
 }
